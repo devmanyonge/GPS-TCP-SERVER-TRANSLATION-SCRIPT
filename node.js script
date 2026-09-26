@@ -1,0 +1,55 @@
+const net = require('net');
+const axios = require('axios');
+
+const PORT = process.env.PORT || 5023;
+// REPLACE THIS with your actual Web Host Africa PHP script URL:
+const PHP_WEBHOOK_URL = 'https://yourdomain.co.ke'; 
+
+const server = net.createServer((socket) => {
+    let currentImei = null;
+
+    socket.on('data', async (data) => {
+        // GT06 Protocol parsing logic
+        // 1. Check for Login Packet (starts with 0x78 0x78)
+        if (data[0] === 0x78 && data[1] === 0x78 && data[3] === 0x01) {
+            // Extract 15-digit IMEI
+            currentImei = data.toString('hex', 4, 12); 
+            console.log(`Tracker logged in. IMEI: ${currentImei}`);
+            
+            // Send Login Success Response Required by VT05R Hardware
+            const response = Buffer.from([0x78, 0x78, 0x05, 0x01, data[data.length-4], data[data.length-3], 0x0D, 0x0A]);
+            socket.write(response);
+        } 
+        // 2. Check for Location Packet (0x22 or 0x12)
+        else if (data[0] === 0x78 && data[1] === 0x78 && (data[3] === 0x22 || data[3] === 0x12)) {
+            // Parse raw GPS data bytes into decimals
+            const latRaw = data.readUInt32BE(11);
+            const lngRaw = data.readUInt32BE(15);
+            const lat = latRaw / 1800000;
+            const lng = lngRaw / 1800000;
+            const speed = data[19]; // Speed in km/h
+
+            console.log(`Location received: Lat ${lat}, Lng ${lng}`);
+
+            // Forward to your Web Host Africa Database Endpoint
+            if (currentImei) {
+                try {
+                    await axios.post(PHP_WEBHOOK_URL, {
+                        imei: currentImei,
+                        lat: lat,
+                        lng: lng,
+                        speed: speed
+                    });
+                } catch (err) {
+                    console.error("Error forwarding data to PHP script:", err.message);
+                }
+            }
+        }
+    });
+
+    socket.on('error', (err) => console.error('Socket error:', err.message));
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Bridge listening for VT05R on port ${PORT}`);
+});
